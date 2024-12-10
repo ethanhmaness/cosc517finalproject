@@ -150,6 +150,7 @@ class PPOAgent:
     def update(self, obs, actions, old_logprobs, values, advantages, returns):
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         dataset = list(zip(obs, actions, old_logprobs, values, advantages, returns))
+        entropy_total, policy_loss_total, value_loss_total = 0, 0, 0
         for _ in range(ppo_epochs):
             np.random.shuffle(dataset)
             for start in range(0, len(dataset), mini_batch_size):
@@ -163,20 +164,30 @@ class PPOAgent:
                 values_b = torch.tensor(values_b, dtype=torch.float32).to(device)
                 advantages_b = torch.tensor(advantages_b, dtype=torch.float32).to(device)
                 returns_b = torch.tensor(returns_b, dtype=torch.float32).to(device)
-
+    
                 _, new_logprobs, entropy, new_values = self.policy.get_action_and_value(obs_b, actions_b)
                 
                 ratio = torch.exp(new_logprobs - old_logprobs_b)
                 surr1 = ratio * advantages_b
                 surr2 = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * advantages_b
                 policy_loss = -torch.min(surr1, surr2).mean()
-
+    
                 value_loss = F.mse_loss(new_values.squeeze(-1), returns_b)
                 loss = policy_loss + 0.5 * value_loss - 0.01 * entropy
-
+    
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+    
+                # Accumulate losses and entropy for logging
+                entropy_total += entropy.item()
+                policy_loss_total += policy_loss.item()
+                value_loss_total += value_loss.item()
+    
+        # Return averaged losses and entropy
+        num_batches = (ppo_epochs * len(dataset)) // mini_batch_size
+        return entropy_total / num_batches, policy_loss_total / num_batches, value_loss_total / num_batches
+
 
 ############################
 # Training Loop
@@ -215,22 +226,30 @@ def main():
     # Open CSV file for logging
     csv_file = open("training_stats.csv", mode="w", newline="")
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["episode", "reward"])
-
+    csv_writer.writerow(["episode", "reward", "avg_reward", "max_reward", "min_reward", "entropy", "policy_loss", "value_loss"])
+    reward_history = []
+    max_reward = float('-inf')
+    min_reward = float('inf')
     episode = 0
     while episode < total_episodes:
         # Collect experience
         obs, actions, old_logprobs, values, advantages, returns = agent.collect_trajectories()
         
         # Update policy
-        agent.update(obs, actions, old_logprobs, values, advantages, returns)
+        entropy, policy_loss, value_loss = agent.update(obs, actions, old_logprobs, values, advantages, returns)
         
         # After updating, run a training episode to see performance
         ep_reward = run_episode(env, agent)
         episode += 1
 
+        reward_history.append(ep_reward)
+        max_reward = max(max_reward, ep_reward)
+        min_reward = min(min_reward, ep_reward)
+        avg_reward = np.mean(reward_history[-100:])
+
         # Log to CSV
-        csv_writer.writerow([episode, ep_reward])
+        csv_writer.writerow([episode, ep_reward, avg_reward, max_reward, min_reward, entropy, policy_loss, value_loss])
+        csv_file.flush()
         csv_file.flush()
 
         print(f"Episode {episode} reward: {ep_reward}")

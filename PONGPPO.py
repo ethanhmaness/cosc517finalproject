@@ -250,9 +250,9 @@ def main():
         # Log to CSV
         csv_writer.writerow([episode, ep_reward, avg_reward, max_reward, min_reward, entropy, policy_loss, value_loss])
         csv_file.flush()
-        csv_file.flush()
+   
 
-        print(f"Episode {episode} reward: {ep_reward}")
+        print(f"Episode {episode} reward: {ep_reward}, entropy: {entropy:.4f}, policy_loss: {policy_loss:.4f}, value_loss: {value_loss:.4f}")
 
         # Test and record video every test_interval episodes
         if episode % test_interval == 0:
